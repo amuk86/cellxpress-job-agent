@@ -4,12 +4,43 @@ import { useRouter } from "next/router";
 
 const CONFIDENCE_THRESHOLD = 0.6;
 
-function fileToBase64(file) {
+// Vercel's serverless functions enforce a hard ~4.5MB request body limit that
+// can't be raised from app code, so a raw phone photo (often 3-8MB) plus a
+// voice note can blow past it once base64-encoded (~33% larger again).
+// We resize + recompress the photo client-side before sending anything.
+function compressImage(file, maxDimension = 1280, quality = 0.7) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > height && width > maxDimension) {
+        height = Math.round((height * maxDimension) / width);
+        width = maxDimension;
+      } else if (height > maxDimension) {
+        width = Math.round((width * maxDimension) / height);
+        height = maxDimension;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(objectUrl);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return reject(new Error("Could not compress photo."));
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = reject;
+    img.src = objectUrl;
   });
 }
 
@@ -20,6 +51,26 @@ function blobToBase64(blob) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+// If the server (or the platform in front of it) returns a non-JSON error
+// page - e.g. Vercel's own 413/500 for an oversized request - res.json()
+// throws a confusing "Unexpected token" error. This gives a readable message
+// instead, and still parses normally for well-formed JSON responses.
+async function safeJson(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (res.status === 413 || /request entity too large/i.test(text)) {
+      throw new Error(
+        "That photo/voice note is too large for the server to accept. Try a shorter recording or a smaller photo."
+      );
+    }
+    throw new Error(
+      `Server returned an unexpected response (status ${res.status}). Check the Vercel function logs for details.`
+    );
+  }
 }
 
 function ConfidenceBadge({ score }) {
@@ -61,7 +112,9 @@ export default function Intake() {
 
   const startRecording = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream);
+    // 32kbps is plenty for a short spoken voice note and keeps the file
+    // small enough to stay well under Vercel's serverless request body limit.
+    const recorder = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
     chunksRef.current = [];
     recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
     recorder.onstop = () => {
@@ -90,8 +143,8 @@ export default function Intake() {
     try {
       const payload = {};
       if (photoFile) {
-        payload.imageBase64 = await fileToBase64(photoFile);
-        payload.imageMimeType = photoFile.type;
+        payload.imageBase64 = await compressImage(photoFile);
+        payload.imageMimeType = "image/jpeg"; // compressImage always re-encodes to JPEG
       }
       if (audioBlob) {
         payload.audioBase64 = await blobToBase64(audioBlob);
@@ -103,7 +156,7 @@ export default function Intake() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Extraction failed.");
 
       setFields((prev) => ({
@@ -134,7 +187,7 @@ export default function Intake() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(fields),
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Could not save job.");
       router.push("/");
     } catch (err) {
