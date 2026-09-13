@@ -1,7 +1,15 @@
 import { getDb } from "../../../lib/firebaseAdmin";
 
 export default async function handler(req, res) {
-  const db = getDb();
+  let db;
+  try {
+    db = getDb();
+  } catch (err) {
+    console.error("Firestore init failed:", err);
+    return res.status(500).json({
+      error: "Server could not connect to the database. Check Firebase credentials.",
+    });
+  }
 
   if (req.method === "GET") {
     try {
