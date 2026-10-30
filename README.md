@@ -77,26 +77,4 @@ vercel
 Then in the Vercel project settings → **Environment Variables**, add the same
 four variables from `.env.local`, and redeploy.
 
-## How it maps to your Part 1 answer sheet
 
-- **Job intake and logging (Step 2):** `/intake` page + `pages/api/extract.js`
-  (Gemini call) + `pages/api/jobs/index.js` (Firestore write).
-- **Job monitoring (Step 4):** dashboard computes "urgent" client-side from
-  `createdAt`, no cron needed for the MVP.
-- **Job completion & customer notification (Steps 5–6):**
-  `pages/api/jobs/[id]/complete.js` flips status, dashboard then surfaces a
-  `wa.me` link pre-filled with a collection message — this is the stand-in
-  for the real WhatsApp Business API integration named in your MVI gap.
-- **Confidence-scoring / human-in-the-loop (ethical considerations table):**
-  Gemini is prompted to return a `confidence` field per extracted value;
-  anything below the threshold is shown to the owner for a quick edit before
-  it's saved, rather than being auto-logged.
-
-## What's still a real gap (be honest about this in Part 2/3)
-
-- No continuous ASR — audio is recorded per-job and sent to Gemini in one
-  shot, not live streaming transcription.
-- WhatsApp is a manual-tap `wa.me` link, not the authenticated Business API
-  (that needs a Meta Business verification + a paid BSP like Twilio).
-- No auth on the dashboard — anyone with the URL can see/edit jobs. Add
-  Firebase Auth + a Vercel middleware check before this goes near production.
